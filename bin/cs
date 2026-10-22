@@ -1,0 +1,83 @@
+#!/usr/bin/env zsh
+# cs — jump to the Ghostty terminal running Claude Code for a project.
+#
+#   cs              pick from all Claude sessions with fzf
+#   cs <query>      jump straight there if exactly one session matches,
+#                   otherwise open fzf pre-filtered with <query>
+#   cs -l           list sessions (status, project, title) and exit
+#
+# Uses Ghostty's AppleScript dictionary (1.3+): every terminal exposes
+# `working directory` and `name` (the tab title), and responds to `focus`.
+# Claude Code sets the title to "<glyph> <task summary>": ✳ when idle and
+# waiting for you, a spinner glyph while it works. Plain shells show a path
+# or a command name, so a leading non-alphanumeric glyph marks a Claude tab.
+
+emulate -L zsh
+setopt pipefail
+
+list_terminals() {
+  # One line per terminal: id <TAB> cwd <TAB> title
+  osascript <<'EOF'
+-- One Apple event per property for all terminals, not one per terminal:
+-- ~0.1 s instead of ~2 s with 30 terminals.
+set out to ""
+set sep to character id 9 -- not `tab`: inside the tell block that is Ghostty's tab class
+tell application "Ghostty"
+  set ids to id of every terminal
+  set wds to working directory of every terminal
+  set tts to name of every terminal
+end tell
+try
+  repeat with i from 1 to count of ids
+    set out to out & (item i of ids) & sep & (item i of wds) & sep & (item i of tts) & linefeed
+  end repeat
+end try
+return out
+EOF
+}
+
+claude_sessions() {
+  # id <TAB> status <TAB> project <TAB> title <TAB> cwd
+  list_terminals | while IFS=$'\t' read -r id cwd title; do
+    [[ -z $id ]] && continue
+    local glyph=${title%% *}
+    # Claude titles start with a single symbol glyph followed by a space.
+    [[ ${#glyph} -eq 1 && $glyph != [[:alnum:]…/~] ]] || continue
+    local state=busy
+    [[ $glyph == ✳ ]] && state=idle
+    print -r -- "$id"$'\t'"$state"$'\t'"${cwd:t}"$'\t'"${title#* }"$'\t'"${cwd/#$HOME/~}"
+  done
+}
+
+focus_terminal() {
+  osascript -e "tell application \"Ghostty\"
+    activate
+    focus (first terminal whose id is \"$1\")
+  end tell" >/dev/null
+}
+
+rows=$(claude_sessions) || { print -u2 "cs: could not read Ghostty terminals"; exit 1; }
+[[ -z $rows ]] && { print -u2 "cs: no Claude sessions found in Ghostty"; exit 1; }
+
+if [[ $1 == -l ]]; then
+  print -r -- "$rows" | cut -f2- | column -t -s $'\t'
+  exit 0
+fi
+
+query=$*
+if [[ -n $query ]]; then
+  # Match on project dir name and full path, case-insensitively.
+  matches=$(print -r -- "$rows" | awk -F'\t' -v q="${query:l}" 'index(tolower($3 " " $5), q)')
+  if [[ $(print -r -- "$matches" | grep -c .) -eq 1 ]]; then
+    focus_terminal "${matches%%$'\t'*}"
+    exit 0
+  fi
+fi
+
+pick=$(print -r -- "$rows" | fzf \
+  --delimiter=$'\t' --with-nth=2,3,4 --nth=2,3 \
+  --query="$query" --select-1 --exit-0 \
+  --prompt='claude> ' --header='status  project  task' \
+  --preview='echo {5}' --preview-window=down,1) || exit 0
+
+focus_terminal "${pick%%$'\t'*}"
