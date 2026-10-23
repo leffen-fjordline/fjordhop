@@ -51,7 +51,7 @@ To update: `git pull && ./install.sh`. To remove: `./install.sh --uninstall`.
 
 ```sh
 brew tap leffen-fjordline/fjordhop https://github.com/leffen-fjordline/fjordhop
-brew install --HEAD fjordhop
+brew install fjordhop
 cp -R "$(brew --prefix fjordhop)/Fjordhop.app" ~/Applications/
 open ~/Applications/Fjordhop.app
 ```
@@ -60,7 +60,7 @@ Homebrew also builds from source and installs `fzf`. It puts `cs` on your
 PATH, but it cannot write to `~/Applications`, so you copy the app there
 yourself. The app has to run from there, not from Homebrew's folder: Open at
 Login remembers the app's path, and Homebrew's path changes with every
-upgrade. After `brew upgrade --fetch-HEAD fjordhop`, quit the app and copy it
+upgrade. After `brew upgrade fjordhop`, quit the app and copy it
 again. To remove: `brew uninstall fjordhop`, then delete
 `~/Applications/Fjordhop.app`.
 

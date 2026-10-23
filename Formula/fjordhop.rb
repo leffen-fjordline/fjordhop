@@ -1,10 +1,12 @@
 # Homebrew formula. This repo doubles as its own tap:
 #   brew tap leffen-fjordline/fjordhop https://github.com/leffen-fjordline/fjordhop
-#   brew install --HEAD fjordhop
+#   brew install fjordhop            (--HEAD for the latest main)
 # Builds from source, like install.sh, so the app is never quarantined.
 class Fjordhop < Formula
   desc "Hop between Claude Code sessions in Ghostty"
   homepage "https://github.com/leffen-fjordline/fjordhop"
+  url "https://github.com/leffen-fjordline/fjordhop/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "85defe8702833606ff593f494449182d395badc214bc449b9ad6df3bf230a243"
   license "MIT"
   head "https://github.com/leffen-fjordline/fjordhop.git", branch: "main"
 
