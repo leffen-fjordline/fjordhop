@@ -14,6 +14,8 @@ you have many of them open in [Ghostty](https://ghostty.org).
 - **`cs`** does the same from the terminal: `cs my-api` jumps straight there,
   `cs` alone opens an fzf picker, `cs -l` lists sessions.
 
+Guides for installing and releasing: <https://leffen-fjordline.github.io/fjordhop/>
+
 ## Requirements
 
 - macOS 14 or later
