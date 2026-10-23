@@ -1,0 +1,45 @@
+site_name: Fjordhop
+site_description: Hop between Claude Code sessions in Ghostty. Install and release guide.
+repo_url: https://github.com/leffen-fjordline/fjordhop
+edit_uri: edit/main/docs/
+strict: true
+exclude_docs: |
+  requirements.txt
+validation:
+  anchors: warn   # with strict, a broken #anchor fails the build
+
+theme:
+  name: material
+  language: en
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle: { icon: material/weather-sunny, name: Light mode }
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed: { alternate_style: true }
+
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Release: release.md

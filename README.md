@@ -94,6 +94,7 @@ would launch it.
 | `bin/cs` | Terminal switcher (zsh + fzf) |
 | `install.sh` | Installs both, or removes them with `--uninstall` |
 | `Formula/fjordhop.rb` | Homebrew formula; this repo is its own tap |
+| `docs/`, `mkdocs.yml` | Install and release guides ([docs/release.md](docs/release.md) for cutting a version) |
 
 ## Known limits
 
