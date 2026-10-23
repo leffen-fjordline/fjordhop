@@ -47,6 +47,23 @@ the app will not turn it back on.
 
 To update: `git pull && ./install.sh`. To remove: `./install.sh --uninstall`.
 
+### With Homebrew
+
+```sh
+brew tap leffen-fjordline/fjordhop https://github.com/leffen-fjordline/fjordhop
+brew install --HEAD fjordhop
+cp -R "$(brew --prefix fjordhop)/Fjordhop.app" ~/Applications/
+open ~/Applications/Fjordhop.app
+```
+
+Homebrew also builds from source and installs `fzf`. It puts `cs` on your
+PATH, but it cannot write to `~/Applications`, so you copy the app there
+yourself. The app has to run from there, not from Homebrew's folder: Open at
+Login remembers the app's path, and Homebrew's path changes with every
+upgrade. After `brew upgrade --fetch-HEAD fjordhop`, quit the app and copy it
+again. To remove: `brew uninstall fjordhop`, then delete
+`~/Applications/Fjordhop.app`.
+
 > We build on your machine instead of shipping a downloaded `.app` on purpose.
 > The app is not signed with a Developer ID, so macOS Gatekeeper would block a
 > downloaded copy. An app you build yourself is not quarantined.
@@ -76,6 +93,7 @@ would launch it.
 | `app/AppIcon.icns`, `app/MenuBarIcon*.png` | App and menu bar icons, generated from `resources/` by `app/make-icons.py` |
 | `bin/cs` | Terminal switcher (zsh + fzf) |
 | `install.sh` | Installs both, or removes them with `--uninstall` |
+| `Formula/fjordhop.rb` | Homebrew formula; this repo is its own tap |
 
 ## Known limits
 
