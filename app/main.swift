@@ -166,6 +166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var saved: Snapshot?
     var hadSessions = false
     var runningIDs: [String: [String]] = [:]
+    // The desktop each Ghostty window was last seen on, by window id.
+    var windowDesktops: [String: DesktopRef] = [:]
 
     // Busy → idle tracking for notifications. A session must have been seen
     // busy, then idle for two polls in a row, so a brief ✳ between tool
@@ -222,6 +224,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             MainActor.assumeIsolated {
                 self?.updateDesktopPanels()
                 DispatchQueue.main.async { self?.refresh() }
+                // Accessibility lists the new desktop's windows a moment
+                // late, and trackDesktops needs them.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.refresh() }
             }
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
@@ -241,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         sessions = found
         trackTransitions(focusedID: focusedID)
         rememberDirs()
+        trackDesktops()
         snapshotSessions()
 
         // Menu bar shows how many sessions are waiting for you.
@@ -298,6 +304,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         if dirs != recentDirs { recentDirs = dirs }
     }
 
+    // Accessibility only shows the windows on the desktops you can see, so
+    // a window's desktop is learnt when you are on it, and kept until then.
+    // A title shared by two windows says nothing about either.
+    func trackDesktops() {
+        let live = Set(sessions.map(\.windowID))
+        windowDesktops = windowDesktops.filter { live.contains($0.key) }
+        guard Ghostty.isRunning else { return }
+        let seen = Spaces.ghosttyWindows()
+        guard !seen.isEmpty else { return }
+        let all = Spaces.all()
+        var titles: [String: Set<String>] = [:] // title key -> window ids
+        for s in sessions { titles[Session.titleKey(s.windowTitle), default: []].insert(s.windowID) }
+        for (key, ids) in titles where ids.count == 1 {
+            let on = seen.filter { $0.value.contains(key) }.keys
+            if on.count == 1, let d = all[on.first!] { windowDesktops[ids.first!] = d }
+        }
+    }
+
     // Saves the sessions once two polls in a row agree, so a Ghostty that is
     // closing its windows one by one is not saved half way. When they are
     // gone, the saved set becomes the one "Restore Sessions" offers.
@@ -312,9 +336,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
         hadSessions = true
         runningIDs = Snapshots.runningClaudeSessions()
-        let s = Snapshot(sessions, ids: runningIDs)
+        let s = Snapshot(sessions, ids: runningIDs, desktops: windowDesktops)
         defer { lastSeen = s }
-        guard s.windows == lastSeen?.windows, s.windows != saved?.windows else { return }
+        guard s.sameLayout(lastSeen), !s.sameLayout(saved) else { return }
         Snapshots.save(s)
         saved = s
     }

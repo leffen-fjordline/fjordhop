@@ -31,6 +31,19 @@ struct Desktop {
     let fullscreen: Bool
 }
 
+// Where a window was, saved so it can go back there after a restart. The
+// uuid usually survives a reboot; if it does not, the position on the
+// display is the next best guess.
+struct DesktopRef: Codable, Equatable, Hashable {
+    let uuid: String
+    let display: String // "Main" when all displays share one set of desktops
+    let number: Int // 1-based position on its display
+}
+
+extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
 enum Spaces {
     static let cid = CGSMainConnectionID()
 
@@ -56,6 +69,92 @@ enum Spaces {
         return NSScreen.screens.first { s in
             guard let uuid = CGDisplayCreateUUIDFromDisplayID(s.displayID)?.takeRetainedValue() else { return false }
             return CFUUIDCreateString(nil, uuid) as String == identifier
+        }
+    }
+
+    // Every normal desktop, by id, as a DesktopRef that can find it again.
+    static func all() -> [UInt64: DesktopRef] {
+        var out: [UInt64: DesktopRef] = [:]
+        for d in displays() {
+            for (i, s) in d.desktops.enumerated() {
+                out[s.id] = DesktopRef(uuid: s.uuid, display: d.identifier, number: i + 1)
+            }
+        }
+        return out
+    }
+
+    // The live id of a saved desktop: the same uuid, else the same position
+    // on the same display, else that position on the first display. Nil if
+    // there are not that many desktops now.
+    static func find(_ ref: DesktopRef) -> UInt64? {
+        let ds = displays()
+        if !ref.uuid.isEmpty, let s = ds.flatMap(\.desktops).first(where: { $0.uuid == ref.uuid }) { return s.id }
+        let d = ds.first { $0.identifier == ref.display } ?? ds.first
+        guard let d, d.desktops.indices.contains(ref.number - 1) else { return nil }
+        return d.desktops[ref.number - 1].id
+    }
+
+    // Shows desktop `id` by pressing the "Move left/right a space" shortcuts
+    // (⌃← and ⌃→, on by default) once per step, waiting for each to land.
+    // There is no public call for this. Needs Accessibility to post keys.
+    static func switchTo(_ id: UInt64) -> Bool {
+        guard AXIsProcessTrusted(),
+              let d = displays().first(where: { $0.desktops.contains { $0.id == id } }),
+              let target = d.desktops.firstIndex(where: { $0.id == id }) else { return false }
+        // The shortcuts act on the display with the pointer.
+        if NSScreen.screens.count > 1, let screen = screen(for: d.identifier) {
+            let f = screen.frame, main = NSScreen.screens[0].frame
+            CGWarpMouseCursorPosition(CGPoint(x: f.midX, y: main.maxY - f.midY))
+        }
+        for _ in 0..<20 {
+            guard let now = displays().first(where: { $0.identifier == d.identifier }),
+                  let at = now.desktops.firstIndex(where: { $0.id == now.current }) else { return false }
+            if at == target { return true }
+            guard press(hotKey: at < target ? 81 : 79) else { return false }
+            // Wait for the desktop to change, then for the slide to finish.
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline, displays().first(where: { $0.identifier == d.identifier })?.current == now.current {
+                usleep(50_000)
+            }
+            usleep(400_000)
+        }
+        return false
+    }
+
+    // Presses a system shortcut by its id in com.apple.symbolichotkeys,
+    // using the keys it is set to. 79 is "Move left a space", 81 right.
+    private static func press(hotKey id: Int) -> Bool {
+        let all = UserDefaults(suiteName: "com.apple.symbolichotkeys")?.dictionary(forKey: "AppleSymbolicHotKeys")
+        let entry = all?[String(id)] as? [String: Any]
+        if let on = entry?["enabled"] as? Bool, !on { return false }
+        let params = (entry?["value"] as? [String: Any])?["parameters"] as? [Int]
+        let key = params?[safe: 1] ?? (id == 79 ? 123 : 124) // ← or →
+        let mods = params?[safe: 2] ?? 0x840000 // ⌃ + fn, as macOS sets arrow keys
+        let src = CGEventSource(stateID: .hidSystemState)
+        for down in [true, false] {
+            let e = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(key), keyDown: down)
+            e?.flags = CGEventFlags(rawValue: UInt64(mods))
+            e?.post(tap: .cghidEventTap)
+        }
+        return true
+    }
+
+    private struct Display {
+        let identifier: String
+        let current: UInt64
+        let desktops: [(id: UInt64, uuid: String)]
+    }
+
+    // Normal desktops only: type 0 is a desktop, 4 a full-screen app.
+    private static func displays() -> [Display] {
+        guard let ds = CGSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else { return [] }
+        return ds.map { d in
+            let cur = d["Current Space"] as? [String: Any]
+            let desktops = (d["Spaces"] as? [[String: Any]] ?? []).filter { ($0["type"] as? Int) == 0 }.compactMap { s in
+                (s["ManagedSpaceID"] as? NSNumber).map { (id: $0.uint64Value, uuid: s["uuid"] as? String ?? "") }
+            }
+            return Display(identifier: d["Display Identifier"] as? String ?? "",
+                           current: (cur?["ManagedSpaceID"] as? NSNumber)?.uint64Value ?? 0, desktops: desktops)
         }
     }
 

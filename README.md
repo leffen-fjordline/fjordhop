@@ -12,7 +12,7 @@ you have many of them open in [Ghostty](https://ghostty.org).
   click the name to rename the desktop.
 - **New Claude Session ▸** opens a Ghostty tab in a project folder and starts `claude`.
 - **Restore Sessions** after a restart reopens every Claude session you had,
-  in the same windows, each resuming its own conversation.
+  in the same windows on the same desktops, each resuming its own conversation.
 - **`cs`** does the same from the terminal: `cs my-api` jumps straight there,
   `cs` alone opens an fzf picker, `cs -l` lists sessions.
 
@@ -99,6 +99,15 @@ the same windows and tabs and runs `claude --resume <id>` in each. Hover over
 it to see the folders. Sessions that are already open are skipped, so
 clicking it twice does no harm.
 
+Each window goes back to the desktop it was on. Restore switches to that
+desktop with ⌃→ / ⌃← (System Settings → Keyboard → Keyboard Shortcuts →
+Mission Control, on by default), opens the window there, and returns to the
+desktop you started on. Accessibility only shows the windows on the desktop
+you are looking at, so the app learns a window's desktop when you visit it.
+Before a planned restart, go through your desktops once, a second or so on
+each. A window whose desktop is not known, or no longer exists, opens on the
+desktop you are on.
+
 Ghostty doesn't say which conversation runs in a tab. The session id comes from
 `~/.claude/sessions/<pid>.json`, which Claude Code writes for each running
 `claude`, matched to tabs by folder.
@@ -132,8 +141,12 @@ Ghostty doesn't say which conversation runs in a tab. The session id comes from
 - Restore uses `~/.claude/sessions/`, which is Claude Code's internal state
   and not a documented format. If that changes, tabs fall back to
   `claude --continue` (the latest conversation in the folder). Two tabs in
-  the same folder may come back swapped. Splits come back as tabs, and
-  windows are not moved back to their desktops.
+  the same folder may come back swapped. Splits come back as tabs.
+- Restore finds a desktop by its uuid, which usually survives a reboot.
+  Failing that it uses the desktop's position, and that is unreliable when
+  "Automatically rearrange Spaces based on most recent use" is on (System
+  Settings → Desktop & Dock). A window's desktop is learnt anew each time the
+  app starts.
 - If ⌃⌥C is already taken by another app, change `registerHotKey(...)` in
   `app/main.swift` and run `./install.sh`.
 

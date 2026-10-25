@@ -14,6 +14,9 @@
 // That file is not a documented format: without it, a tab falls back to
 // `claude --continue`, the most recent conversation in its folder.
 // Sessions running outside Ghostty are left out, as far as the counts allow.
+//
+// Each window also keeps the desktop it was last seen on (see trackDesktops
+// in main.swift), and a restore opens it there again.
 
 import Foundation
 
@@ -29,11 +32,14 @@ struct SavedTab: Codable, Equatable {
 struct Snapshot: Codable, Equatable {
     var savedAt: Date
     var windows: [[SavedTab]]
+    // One per window, nil where it is not known. Missing in snapshots saved
+    // before desktops were.
+    var desktops: [DesktopRef?]?
 
     var tabs: [SavedTab] { windows.flatMap { $0 } }
 
     // Groups sessions by Ghostty window, keeping Ghostty's order.
-    init(_ sessions: [Session], ids: [String: [String]]) {
+    init(_ sessions: [Session], ids: [String: [String]], desktops: [String: DesktopRef] = [:]) {
         var free = ids
         var tabs: [SavedTab?] = sessions.map { s in
             guard let id = free[s.cwd]?.first else { return nil }
@@ -64,6 +70,16 @@ struct Snapshot: Codable, Equatable {
         }
         savedAt = Date()
         windows = order.map { byWindow[$0]! }
+        self.desktops = order.map { desktops[$0] }
+    }
+
+    // Same sessions in the same places, whenever they were saved.
+    func sameLayout(_ other: Snapshot?) -> Bool {
+        windows == other?.windows && desktops == other?.desktops
+    }
+
+    func desktop(ofWindow i: Int) -> DesktopRef? {
+        desktops?[safe: i] ?? nil
     }
 
     // What is not open now. A tab with a session id is open if that session
@@ -71,9 +87,11 @@ struct Snapshot: Codable, Equatable {
     func missing(running ids: [String: [String]]) -> Snapshot {
         let live = Set(ids.values.flatMap { $0 })
         var s = self
-        s.windows = windows
-            .map { $0.filter { t in t.sessionID.map { !live.contains($0) } ?? (ids[t.cwd] == nil) } }
-            .filter { !$0.isEmpty }
+        let kept = windows.indices
+            .map { (tabs: windows[$0].filter { t in t.sessionID.map { !live.contains($0) } ?? (ids[t.cwd] == nil) }, desktop: desktop(ofWindow: $0)) }
+            .filter { !$0.tabs.isEmpty }
+        s.windows = kept.map(\.tabs)
+        s.desktops = kept.map(\.desktop)
         return s
     }
 }
@@ -134,11 +152,35 @@ enum Snapshots {
 }
 
 extension Ghostty {
-    // One window per saved window, one tab per session. Each tab types its
-    // command into the shell, like newSession, so the shell survives an exit.
+    // One window per saved window, one tab per session, each window on the
+    // desktop it was on. Windows whose desktop is unknown or gone open on
+    // the desktop you are on, first. Then it goes back there.
     static func restore(_ s: Snapshot) {
+        let start = Spaces.current().first?.spaceID
+        var groups: [(desktop: UInt64?, windows: [[SavedTab]])] = []
+        for (i, tabs) in s.windows.enumerated() {
+            let d = s.desktop(ofWindow: i).flatMap(Spaces.find)
+            if let g = groups.firstIndex(where: { $0.desktop == d }) {
+                groups[g].windows.append(tabs)
+            } else {
+                groups.append((d, [tabs]))
+            }
+        }
+        for g in groups.filter({ $0.desktop == nil }) + groups.filter({ $0.desktop != nil }) {
+            if let d = g.desktop, !Spaces.switchTo(d) {
+                NSLog("Fjordhop: could not switch to desktop \(d); restoring here")
+            }
+            open(g.windows)
+        }
+        if let start, groups.contains(where: { $0.desktop != nil }) { _ = Spaces.switchTo(start) }
+    }
+
+    // Each tab types its command into the shell, like newSession, so the
+    // shell survives an exit. No `activate`: that can jump to a desktop
+    // where Ghostty already has a window, and these must open here.
+    private static func open(_ windows: [[SavedTab]]) {
         var lines: [String] = []
-        for tabs in s.windows {
+        for tabs in windows {
             for (i, t) in tabs.enumerated() {
                 let cfg = "{initial working directory:\(quote(t.cwd)), initial input:\(quote(t.command)) & linefeed}"
                 lines.append(i == 0 ? "set w to new window with configuration \(cfg)" : "new tab in w with configuration \(cfg)")
@@ -147,7 +189,6 @@ extension Ghostty {
         guard !lines.isEmpty else { return }
         run("""
         tell application "Ghostty"
-          activate
           \(lines.joined(separator: "\n  "))
         end tell
         """)
