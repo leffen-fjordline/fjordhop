@@ -1,0 +1,155 @@
+// Session snapshot — remembers which Claude sessions were open, window by
+// window, so they can all be reopened after a restart with `claude --resume`.
+//
+// The app saves the open sessions to current.json once they have been the
+// same for two polls in a row, so a Ghostty that is half way through quitting
+// is not saved. When the sessions go away (Ghostty quit, a reboot, or the app
+// starting with none open) current.json becomes last.json, and the menu offers
+// to restore what is in it that is not open already.
+//
+// Ghostty does not say which Claude conversation runs in a terminal. Claude
+// Code itself writes ~/.claude/sessions/<pid>.json with the session id and
+// folder of each running `claude`, so sessions are matched to tabs by folder.
+// Two tabs in one folder get that folder's two session ids, maybe swapped.
+// That file is not a documented format: without it, a tab falls back to
+// `claude --continue`, the most recent conversation in its folder.
+// Sessions running outside Ghostty are left out, as far as the counts allow.
+
+import Foundation
+
+struct SavedTab: Codable, Equatable {
+    let cwd: String
+    let sessionID: String?
+
+    var command: String {
+        sessionID.map { "claude --resume \($0)" } ?? "claude --continue"
+    }
+}
+
+struct Snapshot: Codable, Equatable {
+    var savedAt: Date
+    var windows: [[SavedTab]]
+
+    var tabs: [SavedTab] { windows.flatMap { $0 } }
+
+    // Groups sessions by Ghostty window, keeping Ghostty's order.
+    init(_ sessions: [Session], ids: [String: [String]]) {
+        var free = ids
+        var tabs: [SavedTab?] = sessions.map { s in
+            guard let id = free[s.cwd]?.first else { return nil }
+            free[s.cwd]!.removeFirst()
+            return SavedTab(cwd: s.cwd, sessionID: id)
+        }
+        // Ghostty's folder for a tab can be stale (a `cd` the shell never
+        // reported), so a tab left over takes a session left over, with that
+        // session's folder. Failing that it continues in its own folder,
+        // unless another tab already covers it: `--continue` there would
+        // open the same conversation twice.
+        var spare = free.sorted { $0.key < $1.key }.flatMap { cwd, ids in ids.map { SavedTab(cwd: cwd, sessionID: $0) } }
+        var used = Set(tabs.compactMap { $0?.cwd })
+        for i in tabs.indices where tabs[i] == nil {
+            if !spare.isEmpty {
+                tabs[i] = spare.removeFirst()
+            } else if !used.contains(sessions[i].cwd) {
+                tabs[i] = SavedTab(cwd: sessions[i].cwd, sessionID: nil)
+                used.insert(sessions[i].cwd)
+            }
+        }
+        var order: [String] = []
+        var byWindow: [String: [SavedTab]] = [:]
+        for (s, t) in zip(sessions, tabs) {
+            guard let t else { continue }
+            if byWindow[s.windowID] == nil { order.append(s.windowID) }
+            byWindow[s.windowID, default: []].append(t)
+        }
+        savedAt = Date()
+        windows = order.map { byWindow[$0]! }
+    }
+
+    // What is not open now. A tab with a session id is open if that session
+    // runs; one without is open if any Claude session runs in its folder.
+    func missing(running ids: [String: [String]]) -> Snapshot {
+        let live = Set(ids.values.flatMap { $0 })
+        var s = self
+        s.windows = windows
+            .map { $0.filter { t in t.sessionID.map { !live.contains($0) } ?? (ids[t.cwd] == nil) } }
+            .filter { !$0.isEmpty }
+        return s
+    }
+}
+
+enum Snapshots {
+    static let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Fjordhop")
+    static let current = dir.appendingPathComponent("current.json")
+    static let last = dir.appendingPathComponent("last.json")
+
+    static func save(_ s: Snapshot) {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try enc.encode(s).write(to: current, options: .atomic)
+        } catch {
+            NSLog("Fjordhop: could not save snapshot: \(error)")
+        }
+    }
+
+    static func load(_ url: URL) -> Snapshot? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        return try? dec.decode(Snapshot.self, from: data)
+    }
+
+    // current.json becomes last.json. Nothing happens if there is no
+    // current.json, so a second call keeps the last.json from the first.
+    static func rotate() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: current.path) else { return }
+        try? fm.removeItem(at: last)
+        do { try fm.moveItem(at: current, to: last) } catch {
+            NSLog("Fjordhop: could not keep snapshot: \(error)")
+        }
+    }
+
+    // Session ids of the running interactive `claude` processes, by folder,
+    // read from Claude Code's ~/.claude/sessions/<pid>.json.
+    static func runningClaudeSessions() -> [String: [String]] {
+        let sessionsDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/sessions")
+        let files = (try? FileManager.default.contentsOfDirectory(at: sessionsDir, includingPropertiesForKeys: nil)) ?? []
+        var out: [String: [(started: Double, id: String)]] = [:]
+        for f in files where f.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: f),
+                  let d = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  d["kind"] as? String == "interactive",
+                  let pid = d["pid"] as? Int32, kill(pid, 0) == 0,
+                  let id = d["sessionId"] as? String, let cwd = d["cwd"] as? String else { continue }
+            out[cwd, default: []].append((d["startedAt"] as? Double ?? 0, id))
+        }
+        // Oldest first: the order is the best guess at the order of the tabs.
+        return out.mapValues { $0.sorted { $0.started < $1.started }.map(\.id) }
+    }
+}
+
+extension Ghostty {
+    // One window per saved window, one tab per session. Each tab types its
+    // command into the shell, like newSession, so the shell survives an exit.
+    static func restore(_ s: Snapshot) {
+        var lines: [String] = []
+        for tabs in s.windows {
+            for (i, t) in tabs.enumerated() {
+                let cfg = "{initial working directory:\(quote(t.cwd)), initial input:\(quote(t.command)) & linefeed}"
+                lines.append(i == 0 ? "set w to new window with configuration \(cfg)" : "new tab in w with configuration \(cfg)")
+            }
+        }
+        guard !lines.isEmpty else { return }
+        run("""
+        tell application "Ghostty"
+          activate
+          \(lines.joined(separator: "\n  "))
+        end tell
+        """)
+    }
+}

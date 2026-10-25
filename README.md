@@ -11,6 +11,8 @@ you have many of them open in [Ghostty](https://ghostty.org).
   desktop (Space) and the Claude sessions on it. Click a session to jump there,
   click the name to rename the desktop.
 - **New Claude Session ▸** opens a Ghostty tab in a project folder and starts `claude`.
+- **Restore Sessions** after a restart reopens every Claude session you had,
+  in the same windows, each resuming its own conversation.
 - **`cs`** does the same from the terminal: `cs my-api` jumps straight there,
   `cs` alone opens an fzf picker, `cs -l` lists sessions.
 
@@ -86,10 +88,26 @@ The app checks Ghostty every 5 seconds and again each time you open the menu.
 It never sends a command to Ghostty when Ghostty is closed, because doing so
 would launch it.
 
+### Restoring sessions after a restart
+
+The app saves the open Claude sessions, window by window, to
+`~/Library/Application Support/Fjordhop/current.json` each time they change.
+You don't have to do anything before you restart. When the sessions go away
+(a reboot, quitting Ghostty, or the app starting with none open), that file
+becomes `last.json`. The menu then shows **Restore N Sessions**, which opens
+the same windows and tabs and runs `claude --resume <id>` in each. Hover over
+it to see the folders. Sessions that are already open are skipped, so
+clicking it twice does no harm.
+
+Ghostty doesn't say which conversation runs in a tab. The session id comes from
+`~/.claude/sessions/<pid>.json`, which Claude Code writes for each running
+`claude`, matched to tabs by folder.
+
 | File | What it is |
 |---|---|
 | `app/main.swift` | The menu bar app |
 | `app/desktops.swift` | The desktop panel, and finding which desktop a window is on |
+| `app/snapshot.swift` | Saving the open sessions, and Restore Sessions |
 | `app/Info.plist` | Menu bar only (no Dock icon) and the permission prompt text |
 | `app/build.sh` | Compile, sign locally, install and relaunch |
 | `app/AppIcon.icns`, `app/MenuBarIcon*.png` | App and menu bar icons, generated from `resources/` by `app/make-icons.py` |
@@ -111,6 +129,11 @@ would launch it.
   macOS renumbers desktops (a display change, or rarely a reboot).
 - A session is placed on a desktop by matching its Ghostty window's title. Two
   windows with the same title on different desktops can both show it.
+- Restore uses `~/.claude/sessions/`, which is Claude Code's internal state
+  and not a documented format. If that changes, tabs fall back to
+  `claude --continue` (the latest conversation in the folder). Two tabs in
+  the same folder may come back swapped. Splits come back as tabs, and
+  windows are not moved back to their desktops.
 - If ⌃⌥C is already taken by another app, change `registerHotKey(...)` in
   `app/main.swift` and run `./install.sh`.
 

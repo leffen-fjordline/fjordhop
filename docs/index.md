@@ -6,6 +6,8 @@ you have many of them open in [Ghostty](https://ghostty.org).
 - A **menu bar app** lists every Claude session, split into *Waiting for you*
   and *Working*. Click one to jump to its tab, or press **⌃⌥C** from any app.
 - A **notification** tells you when a session finishes.
+- **Restore Sessions** reopens all your Claude sessions after a restart, each
+  resuming its own conversation.
 - A **desktop panel** shows the name of each desktop (Space) and the sessions
   on it.
 - **`cs`** jumps to a session from the terminal: `cs my-api`, or `cs` alone

@@ -11,7 +11,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Info.plist "$app/Contents/"
 cp AppIcon.icns MenuBarIcon.png MenuBarIcon@2x.png "$app/Contents/Resources/"
-swiftc -O -swift-version 5 -o "$app/Contents/MacOS/Fjordhop" main.swift desktops.swift
+swiftc -O -swift-version 5 -o "$app/Contents/MacOS/Fjordhop" main.swift desktops.swift snapshot.swift
 # Ad-hoc signature: enough for launching locally. Each rebuild changes the
 # signature, so macOS may ask again for permission to control Ghostty.
 codesign --force --sign - "$app"

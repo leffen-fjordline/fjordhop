@@ -5,7 +5,9 @@
 //
 // Also: ⌃⌥C opens the menu from anywhere, a notification fires when a
 // session finishes (busy → idle), and "New Claude Session" opens a tab in
-// a project folder and starts `claude` there.
+// a project folder and starts `claude` there. The open sessions are saved
+// as they change, and reopened with "Restore Sessions" after a restart
+// (snapshot.swift).
 
 import AppKit
 import Carbon.HIToolbox
@@ -19,6 +21,7 @@ struct Session {
     let cwd: String
     let title: String
     let windowTitle: String // its Ghostty window's title, i.e. the selected tab's
+    let windowID: String
 
     var busy: Bool { title.first != "✳" }
     var task: String { String(title.drop(while: { $0 != " " }).dropFirst()) }
@@ -80,6 +83,7 @@ enum Ghostty {
             set focusedID to id of focused terminal of selected tab of front window
           end try
           set wns to name of every window
+          set wis to id of every window
           set ids to id of every terminal of every window
           set wds to working directory of every terminal of every window
           set tts to name of every terminal of every window
@@ -89,7 +93,7 @@ enum Ghostty {
           -- A window opened or closed between the queries: skip what no longer lines up.
           try
             repeat with j from 1 to count of item i of ids
-              set out to out & (item j of item i of ids) & sep & (item j of item i of wds) & sep & (item i of wns) & sep & (item j of item i of tts) & linefeed
+              set out to out & (item j of item i of ids) & sep & (item j of item i of wds) & sep & (item i of wns) & sep & (item i of wis) & sep & (item j of item i of tts) & linefeed
             end repeat
           end try
         end repeat
@@ -99,9 +103,9 @@ enum Ghostty {
         var lines = out.split(separator: "\n", omittingEmptySubsequences: false)
         let focusedID = lines.isEmpty ? "" : String(lines.removeFirst())
         let sessions: [Session] = lines.compactMap { line in
-            let f = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
-            guard f.count == 4, Session.isClaudeTitle(f[3]) else { return nil }
-            return Session(id: f[0], cwd: f[1], title: f[3], windowTitle: f[2])
+            let f = line.split(separator: "\t", maxSplits: 4, omittingEmptySubsequences: false).map(String.init)
+            guard f.count == 5, Session.isClaudeTitle(f[4]) else { return nil }
+            return Session(id: f[0], cwd: f[1], title: f[4], windowTitle: f[2], windowID: f[3])
         }
         return (sessions, focusedID)
     }
@@ -155,6 +159,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     var sessions: [Session] = []
     var timer: Timer?
     let desktopPanels = DesktopPanels()
+
+    // Snapshot state (see snapshot.swift): what the last poll saw, what was
+    // last written to disk, and the running Claude session ids by folder.
+    var lastSeen: Snapshot?
+    var saved: Snapshot?
+    var hadSessions = false
+    var runningIDs: [String: [String]] = [:]
 
     // Busy → idle tracking for notifications. A session must have been seen
     // busy, then idle for two polls in a row, so a brief ✳ between tool
@@ -217,6 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             MainActor.assumeIsolated { self?.updateDesktopPanels() }
         }
 
+        // What was open when the app last ran is what a restore brings back.
+        Snapshots.rotate()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -228,6 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         sessions = found
         trackTransitions(focusedID: focusedID)
         rememberDirs()
+        snapshotSessions()
 
         // Menu bar shows how many sessions are waiting for you.
         let idle = sessions.filter { !$0.busy }.count
@@ -284,6 +298,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         if dirs != recentDirs { recentDirs = dirs }
     }
 
+    // Saves the sessions once two polls in a row agree, so a Ghostty that is
+    // closing its windows one by one is not saved half way. When they are
+    // gone, the saved set becomes the one "Restore Sessions" offers.
+    func snapshotSessions() {
+        guard !sessions.isEmpty else {
+            if hadSessions { Snapshots.rotate() }
+            hadSessions = false
+            lastSeen = nil
+            saved = nil
+            runningIDs = [:]
+            return
+        }
+        hadSessions = true
+        runningIDs = Snapshots.runningClaudeSessions()
+        let s = Snapshot(sessions, ids: runningIDs)
+        defer { lastSeen = s }
+        guard s.windows == lastSeen?.windows, s.windows != saved?.windows else { return }
+        Snapshots.save(s)
+        saved = s
+    }
+
     // Open at Login is on by default: register once, on the first launch.
     // After that the menu toggle owns it, so turning it off sticks.
     func enableLoginItemOnFirstRun() {
@@ -330,6 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
         menu.addItem(.separator())
         menu.addItem(newSessionItem())
+        if let item = restoreItem() { menu.addItem(item) }
 
         menu.addItem(.separator())
         menu.addItem(toggle("Show Desktop Panel", on: desktopPanelEnabled, action: #selector(toggleDesktopPanel(_:))))
@@ -358,6 +394,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         choose.target = self
         sub.addItem(choose)
         item.submenu = sub
+        return item
+    }
+
+    // Only when the last snapshot has sessions that are not open now.
+    func restoreItem() -> NSMenuItem? {
+        guard let last = Snapshots.load(Snapshots.last) else { return nil }
+        let missing = last.missing(running: runningIDs)
+        let n = missing.tabs.count
+        guard n > 0 else { return nil }
+        let when = DateFormatter.localizedString(from: last.savedAt, dateStyle: .short, timeStyle: .short)
+        let item = NSMenuItem(title: "Restore \(n) Session\(n == 1 ? "" : "s")", action: #selector(restore(_:)), keyEquivalent: "")
+        item.toolTip = "Saved \(when):\n" + missing.tabs.map(\.cwd).joined(separator: "\n")
+        item.representedObject = missing
+        item.target = self
         return item
     }
 
@@ -392,6 +442,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     @objc func newSession(_ sender: NSMenuItem) {
         guard let dir = sender.representedObject as? String else { return }
         Ghostty.newSession(in: dir)
+    }
+
+    @objc func restore(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? Snapshot else { return }
+        Ghostty.restore(s)
     }
 
     @objc func chooseFolder(_ sender: NSMenuItem) {
