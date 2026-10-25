@@ -5,8 +5,8 @@
 class Fjordhop < Formula
   desc "Hop between Claude Code sessions in Ghostty"
   homepage "https://github.com/leffen-fjordline/fjordhop"
-  url "https://github.com/leffen-fjordline/fjordhop/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "85defe8702833606ff593f494449182d395badc214bc449b9ad6df3bf230a243"
+  url "https://github.com/leffen-fjordline/fjordhop/archive/refs/tags/v0.2.0.tar.gz"
+  sha256 "6e8c356fd5e53bc97ee2e1b0dca4cbdb32e552d140fa8844b4a1cb5fc2ffd491"
   license "MIT"
   head "https://github.com/leffen-fjordline/fjordhop.git", branch: "main"
 
